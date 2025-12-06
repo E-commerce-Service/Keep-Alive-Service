@@ -1,12 +1,15 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"strings"
 	"time"
+
+	_ "github.com/lib/pq"
 )
 
 func main() {
@@ -17,7 +20,7 @@ func main() {
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("I am alive and waking up others! ☕"))
+		w.Write([]byte("I am alive! Monitoring HTTP and DBs... ☕"))
 	})
 
 	go func() {
@@ -28,27 +31,37 @@ func main() {
 	}()
 
 	targetsEnv := os.Getenv("TARGET_URLS")
-	if targetsEnv == "" {
-		log.Println("⚠️ Nenhuma URL configurada em TARGET_URLS")
-	} else {
-		targets := strings.Split(targetsEnv, ",")
-		ticker := time.NewTicker(10 * time.Minute)
-		pingHosts(targets)
+	dbUrlsEnv := os.Getenv("DB_URLS")
 
-		for range ticker.C {
-			pingHosts(targets)
-		}
+	ticker := time.NewTicker(10 * time.Minute)
+
+	runChecks(targetsEnv, dbUrlsEnv)
+
+	for range ticker.C {
+		runChecks(targetsEnv, dbUrlsEnv)
 	}
-
-	select {}
 }
 
-func pingHosts(targets []string) {
-	log.Println("--- Starting Ping Round ---")
-	client := http.Client{
-		Timeout: 10 * time.Second,
+func runChecks(httpTargets, dbTargets string) {
+	log.Println("--- Starting Check Round ---")
+
+	if httpTargets != "" {
+		urls := strings.Split(httpTargets, ",")
+		pingHttp(urls)
+	} else {
+		log.Println("⚠️ Nenhuma URL HTTP configurada.")
 	}
 
+	if dbTargets != "" {
+		dbs := strings.Split(dbTargets, ",")
+		pingDatabases(dbs)
+	} else {
+		log.Println("⚠️ Nenhum Banco de Dados configurado.")
+	}
+}
+
+func pingHttp(targets []string) {
+	client := http.Client{Timeout: 10 * time.Second}
 	for _, url := range targets {
 		url = strings.TrimSpace(url)
 		if url == "" {
@@ -57,10 +70,38 @@ func pingHosts(targets []string) {
 
 		resp, err := client.Get(url)
 		if err != nil {
-			log.Printf("❌ Falha ao acordar %s: %v", url, err)
+			log.Printf("❌ HTTP Falha: %s | Erro: %v", url, err)
 			continue
 		}
 		resp.Body.Close()
-		log.Printf("✅ Sucesso %s: Status %d", url, resp.StatusCode)
+		log.Printf("✅ HTTP Sucesso: %s | Status: %d", url, resp.StatusCode)
+	}
+}
+
+func pingDatabases(connStrings []string) {
+	for _, connStr := range connStrings {
+		connStr = strings.TrimSpace(connStr)
+		if connStr == "" {
+			continue
+		}
+
+		db, err := sql.Open("postgres", connStr)
+		if err != nil {
+			log.Printf("❌ DB Erro ao abrir driver: %v", err)
+			continue
+		}
+
+		defer db.Close()
+
+		err = db.Ping()
+		if err != nil {
+			safeLog := "Supabase/Postgres"
+			if parts := strings.Split(connStr, "@"); len(parts) > 1 {
+				safeLog = "..." + parts[1]
+			}
+			log.Printf("❌ DB Falha ao conectar em %s: %v", safeLog, err)
+		} else {
+			log.Printf("✅ DB Sucesso: Conexão ativa com o banco!")
+		}
 	}
 }
