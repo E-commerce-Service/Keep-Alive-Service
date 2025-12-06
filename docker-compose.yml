@@ -1,0 +1,8 @@
+services:
+  keep-alive:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - TARGET_URLS=https://google.com,https://github.com
